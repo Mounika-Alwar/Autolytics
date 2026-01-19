@@ -12,7 +12,7 @@ import io
 load_dotenv()
 
 llm = ChatGoogleGenerativeAI(
-      model="models/gemini-2.0-flash",
+      model="models/gemini-2.5-flash",
     google_api_key=os.getenv("GEMINI_API_KEY")
 )
 

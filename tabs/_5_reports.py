@@ -14,7 +14,7 @@ from langchain.chains import LLMChain
 load_dotenv()
 
 # ----------------- Initialize Gemini LLM -----------------
-llm = ChatGoogleGenerativeAI(model="models/gemini-2.0-flash",google_api_key=os.getenv("GEMINI_API_KEY"))  # Use Gemini model
+llm = ChatGoogleGenerativeAI(model="models/gemini-2.5-flash",google_api_key=os.getenv("GEMINI_API_KEY"))  # Use Gemini model
 
 # ----------------- Function to generate report using LLM -----------------
 def generate_report(eda_summary, model_metrics, predictions, chart_paths):

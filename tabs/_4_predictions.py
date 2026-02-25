@@ -4,6 +4,9 @@ import numpy as np
 import io
 import plotly.express as px
 
+from agents import get_or_create_agents
+
+
 def show():
     st.subheader("Predictions Page")
     st.markdown("Upload a new dataset and apply your trained model to get predictions.")
@@ -13,8 +16,13 @@ def show():
         st.warning("Please train a model first on the ML Training page.")
         return
 
-    model = st.session_state["trained_model"]
-    ml_results = st.session_state.get("ml_results", {})
+    # Sync analyst agent with trained model and metadata
+    _, analyst_agent, _ = get_or_create_agents(st.session_state)
+    analyst_agent.trained_models["latest"] = st.session_state["trained_model"]
+    if "ml_results" in st.session_state:
+        analyst_agent.analysis_results["ml"] = st.session_state["ml_results"]
+
+    ml_results = analyst_agent.analysis_results.get("ml", {})
     model_type = ml_results.get("type", "Regression")
 
     # ----------------- File uploader -----------------
@@ -33,83 +41,68 @@ def show():
             st.success("✅ Dataset uploaded successfully!")
             st.dataframe(df_new.head())
 
-            # ----------------- Prepare features -----------------
-            if model_type != "Clustering":
-                target_col = None
-                if model_type == "Classification":
-                    target_col = st.selectbox(
-                        "Select target column (if exists in new dataset, else skip):",
-                        [None] + list(df_new.columns)
-                    )
-
+            # ----------------- Optional target for classification -----------------
+            if model_type == "Classification":
+                target_col = st.selectbox(
+                    "Select target column (if exists in new dataset, else skip):",
+                    [None] + list(df_new.columns),
+                )
                 if target_col:
-                    df_features = df_new.drop(columns=[target_col])
-                else:
-                    df_features = df_new.copy()
-
-                # Encode categorical columns
-                X_new = pd.get_dummies(df_features, drop_first=True)
-
-                # Align with training columns
-                if "feature_columns" in st.session_state:
-                    X_new = X_new.reindex(
-                        columns=st.session_state["feature_columns"], fill_value=0
-                    )
-
-            else:
-                # Clustering: use all features
-                X_new = pd.get_dummies(df_new, drop_first=True)
+                    df_new = df_new.drop(columns=[target_col])
 
             # ----------------- Predict button -----------------
             if st.button("Predict"):
+                result = analyst_agent.generatePrediction(df_new)
+                y_pred_new = result["predictions"]
+                df_result = result["result_frame"]
+
                 if model_type == "Clustering":
-                    y_pred_new = model.predict(X_new)
-                    df_new["Cluster"] = y_pred_new
                     st.write("### Predicted Clusters")
-                    st.dataframe(df_new)
+                    st.dataframe(df_result)
 
                     # Scatter plot for first 2 numeric columns
-                    numeric_cols = df_new.select_dtypes(include=np.number).columns.tolist()
-                    if len(numeric_cols) >= 2:
+                    numeric_cols = df_result.select_dtypes(include=np.number).columns.tolist()
+                    if "Cluster" in df_result.columns and len(numeric_cols) >= 2:
                         fig = px.scatter(
-                            df_new,
+                            df_result,
                             x=numeric_cols[0],
                             y=numeric_cols[1],
                             color="Cluster",
-                            title="Cluster Visualization"
+                            title="Cluster Visualization",
                         )
                         st.plotly_chart(fig, use_container_width=True)
-
                 else:
-                    y_pred_new = model.predict(X_new)
-                    df_new["Predictions"] = y_pred_new
                     st.write("### Predictions")
-                    st.dataframe(df_new)
+                    st.dataframe(df_result)
 
                     # Regression plot: predicted vs first numeric feature
                     if model_type == "Regression":
-                        numeric_cols = df_new.select_dtypes(include=np.number).columns.tolist()
+                        numeric_cols = df_result.select_dtypes(include=np.number).columns.tolist()
                         if numeric_cols:
                             fig = px.scatter(
-                                x=df_new[numeric_cols[0]],
+                                x=df_result[numeric_cols[0]],
                                 y=y_pred_new,
                                 labels={"x": numeric_cols[0], "y": "Predicted"},
-                                title="Predicted vs Feature"
+                                title="Predicted vs Feature",
                             )
                             st.plotly_chart(fig, use_container_width=True)
 
                 # ----------------- Store predictions -----------------
                 st.session_state["predictions_new"] = y_pred_new
+                analyst_agent.analysis_results["predictions_new"] = {
+                    "shape": list(df_result.shape),
+                    "columns": list(df_result.columns),
+                }
 
                 # ----------------- Download as CSV -----------------
                 csv_buffer = io.StringIO()
-                df_new.to_csv(csv_buffer, index=False)
+                df_result.to_csv(csv_buffer, index=False)
                 csv_bytes = csv_buffer.getvalue().encode()
                 st.download_button(
                     label="Download Predictions as CSV",
                     data=csv_bytes,
                     file_name="predictions.csv",
-                    mime="text/csv"
+                    mime="text/csv",
                 )
 
         except Exception as e:

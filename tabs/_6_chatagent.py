@@ -1,6 +1,114 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+
+from agents import get_or_create_agents
+
+
+def try_generate_chart(df: pd.DataFrame, question: str) -> str:
+    """
+    Best-effort helper to render quick visualizations based on the user's question.
+    This stays in the UI layer while analytical context comes from the agents.
+    """
+    try:
+        if "distribution" in question.lower():
+            col = df.select_dtypes(include=["number"]).columns[0]
+            fig = px.histogram(df, x=col, title=f"{col} Distribution")
+            st.plotly_chart(fig, use_container_width=True)
+            return f"Displayed distribution chart for {col}."
+        if "correlation" in question.lower():
+            corr = df.corr(numeric_only=True)
+            fig = px.imshow(corr, text_auto=True, title="Correlation Heatmap")
+            st.plotly_chart(fig, use_container_width=True)
+            return "Displayed correlation heatmap."
+    except Exception as e:
+        return f"Chart generation skipped: {e}"
+    return ""
+
+
+def show():
+    st.subheader(" Chat Agent")
+    st.write("Ask the AI Analyst anything about your dataset, EDA, or model.")
+
+    if "dataset" not in st.session_state:
+        st.warning("⚠️ Please upload a dataset first from the Upload page.")
+        return
+
+    # Initialize agents and sync with current session data
+    business_user, analyst_agent, knowledge_agent = get_or_create_agents(st.session_state)
+
+    df = st.session_state["dataset"]
+    analyst_agent.dataset = df
+    business_user.uploaded_dataset = df
+
+    # Let the analyst agent know about existing analysis results if present
+    if "eda_results" in st.session_state:
+        analyst_agent.analysis_results["eda"] = st.session_state["eda_results"]
+    if "ml_results" in st.session_state:
+        analyst_agent.analysis_results["ml"] = st.session_state["ml_results"]
+    if "predictions_new" in st.session_state and isinstance(
+        st.session_state["predictions_new"], (pd.DataFrame, pd.Series)
+    ):
+        preds_new = st.session_state["predictions_new"]
+        analyst_agent.analysis_results["predictions_new"] = {
+            "shape": list(preds_new.shape),
+            "preview": str(getattr(preds_new, "head", lambda: preds_new)()),
+        }
+
+    user_question = st.text_area(
+        "Your question:", placeholder="E.g., Which feature is most correlated with churn?"
+    )
+
+    if st.button("Ask Agent"):
+        if not user_question.strip():
+            st.info("Please enter a question first.")
+            return
+
+        with st.spinner("Analyzing your question..."):
+            try:
+                # BusinessUser integrates with AIAnalystAgent and KnowledgeAgent
+                answer = business_user.askQuestion(
+                    question=user_question,
+                    analyst=analyst_agent,
+                    knowledge_agent=knowledge_agent,
+                )
+            except Exception as e:
+                st.error(f"Agent error: {e}")
+                return
+
+        # Display response
+        st.markdown("### 💬 Agent’s Response")
+        st.write(answer)
+
+        # Try charts if relevant
+        msg = try_generate_chart(df, user_question)
+        if msg:
+            st.info(msg)
+
+    # Sidebar chat history from KnowledgeAgent's memory
+    with st.sidebar.expander("🕒 Chat History", expanded=False):
+        messages = getattr(knowledge_agent.chat_history, "chat_memory", None)
+        if messages and messages.messages:
+            for msg in messages.messages:
+                if msg.type == "human":
+                    st.markdown(f"🧍‍♀️ **You:** {msg.content}")
+                else:
+                    st.markdown(f"🤖 **Agent:** {msg.content}")
+        else:
+            st.write("No chat history yet.")
+
+    # Clear chat option
+    if st.sidebar.button("🧹 Clear Chat"):
+        knowledge_agent.chat_history.clear()
+        st.sidebar.success("Chat cleared!")
+
+
+if __name__ == "__main__":
+    show()
+
+import streamlit as st
+import pandas as pd
+import plotly.express as px
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.prompts import PromptTemplate
 from langchain.chains import LLMChain
